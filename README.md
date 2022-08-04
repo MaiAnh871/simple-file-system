@@ -3,7 +3,7 @@
 ## Basic Knowledge - Linux File System
 A file system is an organization of data and metadata on a storage device.
 
-![alt](https://user-images.githubusercontent.com/94096485/182757237-dd0ebab1-448d-4fe8-b40f-d870ce3b0304.png)
+![Linux File System Structure](https://user-images.githubusercontent.com/94096485/182757237-dd0ebab1-448d-4fe8-b40f-d870ce3b0304.png)
 
 The file system "simplefs" is helpful to understand Linux VFS and file system basics.
 The Linux VFS supports multiple file systems. The kernel does most of the work while the file system specific tasks are delegated to the individual file systems through the handlers. Instead of calling the functions directly the kernel uses various Operation Tables, which are a collection of handlers for each operation (these are actually structures of function pointers for each handlers/callbacks). 
@@ -70,18 +70,36 @@ $ sudo rmmod simplefs
 
 ## Design
 
+The file system is implemented in Linux in the form of a kernel module, but the kernel module of the file system is different from the kernel module of the general character device. The user application does not communicate with the file system directly through file_operations, but VFS operates the file system. of each element.
+Therefore, in the following implementation of simplefs, most of the code is implemented from the Linux VFS interface defined in <linux/fs.h> to complete a file system.
 At present, simplefs only provides straightforward features.
 
 ### Partition layout
-```
-+------------+-------------+-------------------+-------------------+-------------+
-| superblock | inode store | inode free bitmap | block free bitmap | data blocks |
-+------------+-------------+-------------------+-------------------+-------------+
-```
-Each block is 4 KiB large.
+
+A block (4 KiB) is used as the storage unit in simplefs. The figure below shows the partition layout of simplefs and the number of blocks that can be stored in each partition.
+
+simplefs partition layout
++---------------+
+|  superblock   |  1 block
++---------------+
+|  inode store  |  sb->nr_istore_blocks blocks
++---------------+
+| ifree bitmap  |  sb->nr_ifree_blocks blocks
++---------------+
+| bfree bitmap  |  sb->nr_bfree_blocks blocks
++---------------+
+|    data       |
+|      blocks   |  rest of the blocks
++---------------+
+
+Such a partition layout is created when the file system is formatted, which is what is executed in mkfs.c.
 
 ### Superblock
-The superblock is the first block of the partition (block 0). It contains the partition's metadata, such as the number of blocks, number of inodes, number of free inodes/blocks, ...
+The superblock object contains the metadata required by the entire file system and is also responsible for operating the inode.
+It is the first block of the partition (block 0). It contains the partition's metadata, such as the number of blocks, number of inodes, number of free inodes/blocks, ...
+
+### Inode
+Inode is a data structure in the Linux file system. It is used to store the metadata information of files in the file system. It is also an intermediate interface between files and data to perform read, write and other operations.
 
 ### Inode store
 Contains all the inodes of the partition. The maximum number of inodes is equal to the number of blocks of the partition. Each inode contains 72 B of data: standard data such as file size and number of used blocks, as well as a simplefs-specific field `ei_block`. This block contains:
@@ -133,6 +151,9 @@ Contains all the inodes of the partition. The maximum number of inodes is equal 
                                     +----------------+
   ```
 
+Also, in this struct, i_blocks records the total number occupied by the inode's own data block + extent blocks.
+Each block must have a corresponding inode, so if the size of the storage device can be divided into N blocks, at least N inodes need to be prepared, and a block can store up to ⌊4096 ÷ 72⌋ = 56 inodes, so inode store partition to store all the inode data needs to occupy ⌈N ÷ 56⌉ blocks (that is, the nr_inodes value in the superblock)
+
 ### Extent support
 The extent covers consecutive blocks, we allocate consecutive disk blocks for it at a single time. It is described by `struct simplefs_extent` which contains three members:
 - `ee_block`: first logical block extent covers.
@@ -154,6 +175,21 @@ struct simplefs_extent
                                  +---------+
 
 ```
+
+### Dentry
+Dentry is the interface between file entities and inodes, used to track the hierarchy structure between files and directories. Each dentry maps an inode number to a file and records its parent directory.
+
+![Dentry Understand](https://user-images.githubusercontent.com/94096485/182758363-bbcd980f-2a6d-4cbe-8677-3241a08b00d3.png)
+
+### iFree Bitmap
+The usage registration table of an inode, each inode is represented by a bit, the inode in use is marked as 0 in the table, otherwise it is marked as 1, if 3 inodes have been used in the file system, the ifree at this time bitmap should be as follows:
+```
+0000111111........
+```
+If the total number of inodes available in simplefs is N, the space that this partition needs to occupy is exactly N bits.
+
+### bFree Bitmap
+Same as ifree bitmap above, but records the use of block data.
 
 ## TODO
 
