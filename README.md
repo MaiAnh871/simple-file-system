@@ -1,5 +1,10 @@
 # simplefs - a simple file system for Linux
 
+## Basic Knowledge - Linux File System
+A file system is an organization of data and metadata on a storage device.
+
+![alt](https://user-images.githubusercontent.com/94096485/182757237-dd0ebab1-448d-4fe8-b40f-d870ce3b0304.png)
+
 The file system "simplefs" is helpful to understand Linux VFS and file system basics.
 The Linux VFS supports multiple file systems. The kernel does most of the work while the file system specific tasks are delegated to the individual file systems through the handlers. Instead of calling the functions directly the kernel uses various Operation Tables, which are a collection of handlers for each operation (these are actually structures of function pointers for each handlers/callbacks). 
 
