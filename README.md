@@ -1,6 +1,7 @@
 # simplefs - a simple file system for Linux
 
 ## Basic Knowledge - Linux File System
+
 A file system is an organization of data and metadata on a storage device.
 
 ![Linux File System Structure](https://user-images.githubusercontent.com/94096485/182757237-dd0ebab1-448d-4fe8-b40f-d870ce3b0304.png)
@@ -77,7 +78,7 @@ At present, simplefs only provides straightforward features.
 ### Partition layout
 
 A block (4 KiB) is used as the storage unit in simplefs. The figure below shows the partition layout of simplefs and the number of blocks that can be stored in each partition.
-
+```
 simplefs partition layout
 +---------------+
 |  superblock   |  1 block
@@ -91,19 +92,51 @@ simplefs partition layout
 |    data       |
 |      blocks   |  rest of the blocks
 +---------------+
-
+```
 Such a partition layout is created when the file system is formatted, which is what is executed in mkfs.c.
 
 ### Superblock
+
 The superblock object contains the metadata required by the entire file system and is also responsible for operating the inode.
 It is the first block of the partition (block 0). It contains the partition's metadata, such as the number of blocks, number of inodes, number of free inodes/blocks, ...
 
 ### Inode
+
 Inode is a data structure in the Linux file system. It is used to store the metadata information of files in the file system. It is also an intermediate interface between files and data to perform read, write and other operations.
 
+### Dentry
+
+Dentry is the interface between file entities and inodes, used to track the hierarchy structure between files and directories. Each dentry maps an inode number to a file and records its parent directory.
+
+![Dentry Understand](https://user-images.githubusercontent.com/94096485/182758363-bbcd980f-2a6d-4cbe-8677-3241a08b00d3.png)
+
 ### Inode store
-Contains all the inodes of the partition. The maximum number of inodes is equal to the number of blocks of the partition. Each inode contains 72 B of data: standard data such as file size and number of used blocks, as well as a simplefs-specific field `ei_block`. This block contains:
-  - for a directory: the list of files in this directory. A directory can contain at most 40920 files, and filenames are limited to 255 characters to fit in a single block.
+
+Contains all the inodes of the partition. The maximum number of inodes is equal to the number of blocks of the partition. Each inode contains 72 B of data: standard data such as file size and number of used blocks, as well as a simplefs-specific field `ei_block`. 
+
+Also, in this struct, `i_blocks` records the total number occupied by the inode's own data block + extent blocks.
+Each block must have a corresponding inode, so if the size of the storage device can be divided into N blocks, at least N inodes need to be prepared, and a block can store up to ⌊4096 ÷ 72⌋ = 56 inodes, so inode store partition to store all the inode data needs to occupy ⌈N ÷ 56⌉ blocks (that is, the nr_inodes value in the superblock)
+
+### iFree Bitmap
+
+The usage registration table of an inode, each inode is represented by a bit, the inode in use is marked as 0 in the table, otherwise it is marked as 1, if 3 inodes have been used in the file system, the ifree at this time bitmap should be as follows:
+```
+0000111111........
+```
+If the total number of inodes available in simplefs is N, the space that this partition needs to occupy is exactly N bits.
+
+### bFree Bitmap
+
+Same as ifree bitmap above, but records the use of block data.
+
+### Data block
+
+The aforementioned partitions such as superblock, inode store, etc. are used to store the metadata of the data block, and the data block partition here is the block that actually stores the data, and its size is all the remaining space on the storage device. The entire data blocks partition is also divided into 4KiB blocks, and each block can be divided into the following three usage scenarios:
+
+  - Store the content information of the directory inode: the list of files in this directory. A directory can contain at most 40920 files, and filenames are limited to 255 characters to fit in a single block.
+
+  The length of filename in struct simplefs_file is 28 bytes, plus an inode of 4 bytes, multiplied by 128 struct simplefs_file total (28+4) × 128 = 4096 bytes, which is exactly the size of a block
+
   ```
   inode
   +-----------------------+
@@ -125,7 +158,7 @@ Contains all the inodes of the partition. The maximum number of inodes is equal 
                                       +----------------+
 
   ```
-  - for a file: the list of extents containing the actual data of this file. Since block IDs are stored as `sizeof(struct simplefs_extent)` bytes values, at most 341 links fit in a single block, limiting the size of a file to around 10.65 MiB (10912 KiB).
+  - Store the content information of the file inode: When the block is corresponding to the `ei_block` field in an inode, this block will be used to store the number and length of the extent block (where the file content is actually stored). Since block IDs are stored as `sizeof(struct simplefs_extent)` bytes values, at most 341 links fit in a single block, limiting the size of a file to around 10.65 MiB (10912 KiB).
   ```
   inode                                                
   +-----------------------+                           
@@ -151,10 +184,8 @@ Contains all the inodes of the partition. The maximum number of inodes is equal 
                                     +----------------+
   ```
 
-Also, in this struct, i_blocks records the total number occupied by the inode's own data block + extent blocks.
-Each block must have a corresponding inode, so if the size of the storage device can be divided into N blocks, at least N inodes need to be prepared, and a block can store up to ⌊4096 ÷ 72⌋ = 56 inodes, so inode store partition to store all the inode data needs to occupy ⌈N ÷ 56⌉ blocks (that is, the nr_inodes value in the superblock)
-
 ### Extent support
+
 The extent covers consecutive blocks, we allocate consecutive disk blocks for it at a single time. It is described by `struct simplefs_extent` which contains three members:
 - `ee_block`: first logical block extent covers.
 - `ee_len`: number of blocks covered by extent.
@@ -175,21 +206,6 @@ struct simplefs_extent
                                  +---------+
 
 ```
-
-### Dentry
-Dentry is the interface between file entities and inodes, used to track the hierarchy structure between files and directories. Each dentry maps an inode number to a file and records its parent directory.
-
-![Dentry Understand](https://user-images.githubusercontent.com/94096485/182758363-bbcd980f-2a6d-4cbe-8677-3241a08b00d3.png)
-
-### iFree Bitmap
-The usage registration table of an inode, each inode is represented by a bit, the inode in use is marked as 0 in the table, otherwise it is marked as 1, if 3 inodes have been used in the file system, the ifree at this time bitmap should be as follows:
-```
-0000111111........
-```
-If the total number of inodes available in simplefs is N, the space that this partition needs to occupy is exactly N bits.
-
-### bFree Bitmap
-Same as ifree bitmap above, but records the use of block data.
 
 ## TODO
 
