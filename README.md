@@ -133,9 +133,7 @@ Same as ifree bitmap above, but records the use of block data.
 
 The aforementioned partitions such as superblock, inode store, etc. are used to store the metadata of the data block, and the data block partition here is the block that actually stores the data, and its size is all the remaining space on the storage device. The entire data blocks partition is also divided into 4KiB blocks, and each block can be divided into the following three usage scenarios:
 
-  - Store the content information of the directory inode: the list of files in this directory. A directory can contain at most 40920 files, and filenames are limited to 255 characters to fit in a single block.
-
-  The length of filename in struct simplefs_file is 28 bytes, plus an inode of 4 bytes, multiplied by 128 struct simplefs_file total (28+4) × 128 = 4096 bytes, which is exactly the size of a block
+  - Store the content information of the directory inode: the list of files in this directory. A directory can contain at most 40920 files, and filenames are limited to 255 characters to fit in a single block. The length of filename in struct simplefs_file is 28 bytes, plus an inode of 4 bytes, multiplied by 128 struct simplefs_file total (28+4) × 128 = 4096 bytes, which is exactly the size of a block
 
   ```
   inode
