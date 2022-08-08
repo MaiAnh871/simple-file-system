@@ -54,6 +54,7 @@ void simplefs_kill_sb(struct super_block *sb)
 
 static int __init simplefs_init(void)
 {
+    /* Creates a cache of objects */
     int ret = simplefs_init_inode_cache();
     if (ret) {
         pr_err("Inode cache creation failed\n");
@@ -77,11 +78,12 @@ static void __exit simplefs_exit(void)
     /* Remove a file system that was previously successfully registered with the kernel. */
     int ret = unregister_filesystem(&simplefs_file_system_type);
     if (ret)
-        pr_err("unregister_filesystem() failed\n");
+        pr_err("Unregister_filesystem() failed\n");
 
+    /* Destroys the cache and releases all associated resources. All allocated objects must have been previously freed. */
     simplefs_destroy_inode_cache();
 
-    pr_info("module unloaded\n");
+    pr_info("Module unloaded\n");
 }
 
 module_init(simplefs_init);
