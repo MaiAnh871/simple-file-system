@@ -28,7 +28,7 @@ struct inode *simplefs_iget(struct super_block *sb, unsigned long ino)
         return ERR_PTR(-EINVAL);
 
     /* Get a locked inode from Linux */
-    inode = iget_locked(sb, ino); // obtain an inode from a mounted file system
+    inode = iget_locked(sb, ino);
     if (!inode)
         return ERR_PTR(-ENOMEM);
 
@@ -79,9 +79,7 @@ struct inode *simplefs_iget(struct super_block *sb, unsigned long ino)
     brelse(bh);
 
     /* Unlock the inode to make it usable */
-    /* Called when the inode is fully initialised to clear the new state of the inode and 
-    wake up anyone waiting for the inode to finish initialisation. */
-    unlock_new_inode(inode); 
+    unlock_new_inode(inode);
 
     return inode;
 

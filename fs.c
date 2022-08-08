@@ -72,6 +72,6 @@ static void __exit simplefs_exit(void)
 module_init(simplefs_init);
 module_exit(simplefs_exit);
 
-MODULE_LICENSE(" ");
-MODULE_AUTHOR(" ");
-MODULE_DESCRIPTION("A simple file system");
+MODULE_LICENSE("Dual BSD/GPL");
+MODULE_AUTHOR("National Cheng Kung University, Taiwan");
+MODULE_DESCRIPTION("a simple file system");

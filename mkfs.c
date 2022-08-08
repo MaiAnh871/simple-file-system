@@ -23,17 +23,7 @@ static inline uint32_t idiv_ceil(uint32_t a, uint32_t b)
         return ret + 1;
     return ret;
 }
-/**
- * @brief Initialize superblock partition, calculate boundary of each partition and metadata information 
- * according to the size of the storage device and the size of the various components in the file system.
- * 
- * @param fd A file handle number, in the context of computing, is a temporary reference number that an operating system
- * assigns to a file requested by a user to be opened. The system calls, accesses and interacts with the file through
- * that reference number throughout the session until the user terminates the file or the system session.
- * @param fstats struct stat is a system struct that is defined to store information about files.
- * It is used in several system calls.
- * @return struct superblock* 
- */
+
 static struct superblock *write_superblock(int fd, struct stat *fstats)
 {
     struct superblock *sb = malloc(sizeof(struct superblock));
@@ -86,14 +76,6 @@ static struct superblock *write_superblock(int fd, struct stat *fstats)
     return sb;
 }
 
-/**
- * @brief Initialize the inode storage partition, set the inode of the root directory and point dir_block to 
- * the first of the data blocks, then initialize the remaining inode blocks to 0 using memset.
- * 
- * @param fd A file handle number
- * @param sb Superblock
- * @return int 
- */
 static int write_inode_store(int fd, struct superblock *sb)
 {
     /* Allocate a zeroed block for inode store */
@@ -146,15 +128,6 @@ end:
     return ret;
 }
 
-/**
- * @brief Initialize the inode free bitmap partition, except that the first bit in the entire partition is set to 0 
- * (since the first inode will definitely be reserved for the root directory) and all other bits in the partition
- *  are set to first.
- * 
- * @param fd A file handle number
- * @param sb Superblock
- * @return int 
- */
 static int write_ifree_blocks(int fd, struct superblock *sb)
 {
     char *block = malloc(SIMPLEFS_BLOCK_SIZE);
@@ -194,14 +167,6 @@ end:
     return ret;
 }
 
-/**
- * @brief Initialize the block free bitmap partition, set the bits in all other partitions to 1 except the blocks 
- * that have been used before will be set to 0.
- * 
- * @param fd A file handle
- * @param sb Superblock
- * @return int 
- */
 static int write_bfree_blocks(int fd, struct superblock *sb)
 {
     uint32_t nr_used = le32toh(sb->info.nr_istore_blocks) +
@@ -258,7 +223,7 @@ static int write_data_blocks(int fd, struct superblock *sb)
 {
     /* FIXME: unimplemented */
     return 0;
-} 
+}
 
 int main(int argc, char **argv)
 {
