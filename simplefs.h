@@ -44,6 +44,7 @@
  * +---------------+
  */
 
+/* Each inode block contains 72 Bytes data */
 struct simplefs_inode {
     uint32_t i_mode;   /* File mode */
     uint32_t i_uid;    /* Owner id */
@@ -58,8 +59,8 @@ struct simplefs_inode {
     char i_data[32]; /* store symlink content */
 };
 
-#define SIMPLEFS_INODES_PER_BLOCK \
-    (SIMPLEFS_BLOCK_SIZE / sizeof(struct simplefs_inode))
+#define SIMPLEFS_INODES_PER_BLOCK \ /* 4KiB/ 72B = 56 inodes/ block */
+    (SIMPLEFS_BLOCK_SIZE / sizeof(struct simplefs_inode)) 
 
 struct simplefs_sb_info {
     uint32_t magic; /* Magic number */
