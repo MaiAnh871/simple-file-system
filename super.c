@@ -9,6 +9,15 @@
 
 #include "simplefs.h"
 
+static struct super_operations simplefs_super_ops = {
+    .put_super = simplefs_put_super,
+    .alloc_inode = simplefs_alloc_inode,
+    .destroy_inode = simplefs_destroy_inode,
+    .write_inode = simplefs_write_inode,
+    .sync_fs = simplefs_sync_fs,
+    .statfs = simplefs_statfs,
+};
+
 /**
  * @brief Lookaside cache solves the memory fragmentation problem. 
  * Lookaside cache is a memory pool that only holds objects of a certain type of structure.
@@ -104,7 +113,7 @@ static int simplefs_write_inode(struct inode *inode,
     /* Superblock on disk */
     struct super_block *sb = inode->i_sb;
 
-    /* Block in VFS*/
+    /* Super block in VFS*/
     struct simplefs_sb_info *sbi = SIMPLEFS_SB(sb);
 
     /**
@@ -176,27 +185,40 @@ static int simplefs_write_inode(struct inode *inode,
     return 0;
 }
 
+/* Called when umount. Drops a temporary reference, frees superblock if there's no references left. */
 static void simplefs_put_super(struct super_block *sb)
 {
     struct simplefs_sb_info *sbi = SIMPLEFS_SB(sb);
     if (sbi) {
+        /* Free previously allocated memory */
         kfree(sbi->ifree_bitmap);
         kfree(sbi->bfree_bitmap);
         kfree(sbi);
     }
 }
 
+/* 
+ * It will be called when VFS wants to write all dirty data back to disk and simplefs will also write all information 
+ * in superblock, ifree bitmap, bfree bitmap back to disk at this time. 
+ * sync() causes all pending modifications to filesystem metadata and cached file data to be written to 
+ * the underlying filesystems. syncfs() is like sync(), but synchronizes just the filesystem containing 
+ * file referred to by the open file descriptor fd.
+ */
 static int simplefs_sync_fs(struct super_block *sb, int wait)
 {
+    /* Super block in VFS */
     struct simplefs_sb_info *sbi = SIMPLEFS_SB(sb);
+
+    /* Super block in disk */
     struct simplefs_sb_info *disk_sb;
     int i;
 
-    /* Flush superblock */
+    /* Flush superblock/ sb_bread reads the corresponding block - block 0 from the device specified in sb and stores it in a buffer*/
     struct buffer_head *bh = sb_bread(sb, 0);
     if (!bh)
         return -EIO;
 
+    /* Data read from sb_bread/ Read from super block */
     disk_sb = (struct simplefs_sb_info *) bh->b_data;
 
     disk_sb->nr_blocks = sbi->nr_blocks;
@@ -207,51 +229,106 @@ static int simplefs_sync_fs(struct super_block *sb, int wait)
     disk_sb->nr_free_inodes = sbi->nr_free_inodes;
     disk_sb->nr_free_blocks = sbi->nr_free_blocks;
 
+    /* 
+     * Mark a buffer_head as needing writeout. It will set the dirty bit against the buffer, then set its backing page
+     * dirty, then tag the page as dirty in its address_space's radix tree and then attach the address_space's inode to 
+     * its superblock's dirty inode list. 
+     */
     mark_buffer_dirty(bh);
+
     if (wait)
+        /*
+         * For a data-integrity writeout, we need to wait upon any in-progress I/O
+         * and then start new I/O and then wait upon it.  The caller must have a ref on
+         * the buffer_head.
+         */
         sync_dirty_buffer(bh);
+
+    /* Frees the specified buffer. */    
     brelse(bh);
 
     /* Flush free inodes bitmask */
     for (i = 0; i < sbi->nr_ifree_blocks; i++) {
+        /* Iterate over all blocks of ifree */
         int idx = sbi->nr_istore_blocks + i + 1;
 
+        /* sb_bread reads the corresponding block - block idx from the device specified in sb and stores it in a buffer*/
         bh = sb_bread(sb, idx);
         if (!bh)
             return -EIO;
 
+        /* Copy SIMPLEFS_BLOCK_SIZE KB from source to dest/ or all bit of ifree_bitmap to bh->b_data */
         memcpy(bh->b_data, (void *) sbi->ifree_bitmap + i * SIMPLEFS_BLOCK_SIZE,
                SIMPLEFS_BLOCK_SIZE);
 
+        /* 
+         * Mark a buffer_head as needing writeout. It will set the dirty bit against the buffer, then set its backing page
+         * dirty, then tag the page as dirty in its address_space's radix tree and then attach the address_space's inode to 
+         * its superblock's dirty inode list. 
+         */
         mark_buffer_dirty(bh);
+
         if (wait)
+            /*
+             * For a data-integrity writeout, we need to wait upon any in-progress I/O
+             * and then start new I/O and then wait upon it.  The caller must have a ref on
+             * the buffer_head.
+             */
             sync_dirty_buffer(bh);
+
+        /* Frees the specified buffer. */  
         brelse(bh);
     }
 
     /* Flush free blocks bitmask */
     for (i = 0; i < sbi->nr_bfree_blocks; i++) {
+        /* Iterate over all blocks of ifree */
         int idx = sbi->nr_istore_blocks + sbi->nr_ifree_blocks + i + 1;
 
+        /* sb_bread reads the corresponding block - block idx from the device specified in sb and stores it in a buffer*/
         bh = sb_bread(sb, idx);
         if (!bh)
             return -EIO;
 
+        /* Copy SIMPLEFS_BLOCK_SIZE KB from source to dest/ or all bit of bfree_bitmap to bh->b_data */
         memcpy(bh->b_data, (void *) sbi->bfree_bitmap + i * SIMPLEFS_BLOCK_SIZE,
                SIMPLEFS_BLOCK_SIZE);
 
+        /* 
+         * Mark a buffer_head as needing writeout. It will set the dirty bit against the buffer, then set its backing page
+         * dirty, then tag the page as dirty in its address_space's radix tree and then attach the address_space's inode to 
+         * its superblock's dirty inode list. 
+         */
         mark_buffer_dirty(bh);
+
         if (wait)
+            /*
+             * For a data-integrity writeout, we need to wait upon any in-progress I/O
+             * and then start new I/O and then wait upon it.  The caller must have a ref on
+             * the buffer_head.
+             */
             sync_dirty_buffer(bh);
+
+        /* Frees the specified buffer. */    
         brelse(bh);
     }
-
     return 0;
 }
 
+/**
+ * @brief When VFS needs to get filesystem statistics (statfs system call), it will be called and simplefs can return real information
+ * 
+ * @param dentry A dentry (short for "directory entry") is what the Linux kernel uses to keep track of 
+ * the hierarchy of files in directories. Each dentry maps an inode number to a file name and a parent directory.
+ * @param stat 
+ * @return int 
+ */
 static int simplefs_statfs(struct dentry *dentry, struct kstatfs *stat)
 {
+    /* The root of the dentry tree */
     struct super_block *sb = dentry->d_sb;
+
+    /* Superblock in VFS */
     struct simplefs_sb_info *sbi = SIMPLEFS_SB(sb);
 
     stat->f_type = SIMPLEFS_MAGIC;
@@ -266,20 +343,24 @@ static int simplefs_statfs(struct dentry *dentry, struct kstatfs *stat)
     return 0;
 }
 
-static struct super_operations simplefs_super_ops = {
-    .put_super = simplefs_put_super,
-    .alloc_inode = simplefs_alloc_inode,
-    .destroy_inode = simplefs_destroy_inode,
-    .write_inode = simplefs_write_inode,
-    .sync_fs = simplefs_sync_fs,
-    .statfs = simplefs_statfs,
-};
-
-/* Fill the struct superblock from partition superblock */
+/**
+ * @brief Called to terminate the superblock initialization. Reads out superblocks, ifree_bitmap, bfree_bitmap in the file system and allocates a copy of the same information
+ * in kernel memory. Initialize the inode of the root directory.
+ * 
+ * @param sb The VFS superblock
+ * @param data Mount options
+ * @param silent Don't complain if it's not a GFS2 filesystem
+ */
 int simplefs_fill_super(struct super_block *sb, void *data, int silent)
 {
+    /* 
+     * Buffer_heads are used for extracting block mappings (via a get_block_t call), for tracking state within
+     * a page (via a page_mapping) and for wrapping bio submission for backward compatibility reasons (e.g. submit_bh).
+     */
     struct buffer_head *bh = NULL;
     struct simplefs_sb_info *csb = NULL;
+
+    /* Kernel memory */
     struct simplefs_sb_info *sbi = NULL;
     struct inode *root_inode = NULL;
     int ret = 0, i;
@@ -290,7 +371,7 @@ int simplefs_fill_super(struct super_block *sb, void *data, int silent)
     sb->s_maxbytes = SIMPLEFS_MAX_FILESIZE;
     sb->s_op = &simplefs_super_ops;
 
-    /* Read sb from disk */
+    /* Read sb from disk (block 0) and store it in a buffer*/
     bh = sb_bread(sb, SIMPLEFS_SB_BLOCK_NR);
     if (!bh)
         return -EIO;
@@ -304,7 +385,13 @@ int simplefs_fill_super(struct super_block *sb, void *data, int silent)
         goto release;
     }
 
-    /* Alloc sb_info */
+    /* 
+     * Allocate memory for sb_info. The memory is set to zero. 
+     * GFP_KERNEL means that allocation is performed on behalf of 
+     * a process running in the kernel space. This means that the calling function is executing a system call on
+     * behalf of a process.Using GFP_KERNEL means that kmalloc can put the current process to sleep waiting 
+     * for a page when called in low-memory situations. 
+     */
     sbi = kzalloc(sizeof(struct simplefs_sb_info), GFP_KERNEL);
     if (!sbi) {
         ret = -ENOMEM;
@@ -320,8 +407,10 @@ int simplefs_fill_super(struct super_block *sb, void *data, int silent)
     sbi->nr_free_blocks = csb->nr_free_blocks;
     sb->s_fs_info = sbi;
 
+    /* Frees the specified buffer. */
     brelse(bh);
 
+    /* From here, comment similar to implefs_sync_fs */
     /* Alloc and copy ifree_bitmap */
     sbi->ifree_bitmap =
         kzalloc(sbi->nr_ifree_blocks * SIMPLEFS_BLOCK_SIZE, GFP_KERNEL);
@@ -368,6 +457,7 @@ int simplefs_fill_super(struct super_block *sb, void *data, int silent)
         brelse(bh);
     }
 
+    
     /* Create root inode */
     root_inode = simplefs_iget(sb, 0);
     if (IS_ERR(root_inode)) {
@@ -377,9 +467,11 @@ int simplefs_fill_super(struct super_block *sb, void *data, int silent)
 #if USER_NS_REQUIRED()
     inode_init_owner(&init_user_ns, root_inode, NULL, root_inode->i_mode);
 #else
+    /* Init uid,gid,mode for new inode according to posix standards */
     inode_init_owner(root_inode, NULL, root_inode->i_mode);
 #endif
     
+    /* Make root inode */
     sb->s_root = d_make_root(root_inode);
     if (!sb->s_root) {
         ret = -ENOMEM;
