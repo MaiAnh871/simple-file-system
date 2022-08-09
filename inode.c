@@ -355,7 +355,7 @@ static int simplefs_create(struct inode *dir,
     /* Get superblock of dir */
     sb = dir->i_sb;
 
-    /* Read parent directory index */
+    /* Read parent directory index from store device (map) into memory */
     bh = sb_bread(sb, ci_dir->ei_block);
     if (!bh)
         return -EIO;
