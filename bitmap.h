@@ -16,6 +16,8 @@ static inline uint32_t get_first_free_bits(unsigned long *freemap,
                                            uint32_t len)
 {
     uint32_t bit, prev = 0, count = 0;
+
+    /* Iterates over bits which are set (bit, address, size) */
     for_each_set_bit (bit, freemap, size) {
         if (prev != bit - 1)
             count = 0;
@@ -36,6 +38,7 @@ static inline uint32_t get_free_inode(struct simplefs_sb_info *sbi)
 {
     uint32_t ret = get_first_free_bits(sbi->ifree_bitmap, sbi->nr_inodes, 1);
     if (ret)
+        /* Decrease number of free inodes */
         sbi->nr_free_inodes--;
     return ret;
 }
@@ -49,6 +52,7 @@ static inline uint32_t get_free_blocks(struct simplefs_sb_info *sbi,
 {
     uint32_t ret = get_first_free_bits(sbi->bfree_bitmap, sbi->nr_blocks, len);
     if (ret)
+        /* Decrease number of free blocks */
         sbi->nr_free_blocks -= len;
     return ret;
 }
@@ -60,10 +64,11 @@ static inline int put_free_bits(unsigned long *freemap,
                                 uint32_t i,
                                 uint32_t len)
 {
-    /* i is greater than freemap size */
+    /* if i is greater than freemap size */
     if (i + len - 1 > size)
         return -1;
 
+    /* Mark the `len` bit(s) from i-th bit in freemap as free */
     bitmap_set(freemap, i, len);
 
     return 0;
@@ -75,6 +80,7 @@ static inline void put_inode(struct simplefs_sb_info *sbi, uint32_t ino)
     if (put_free_bits(sbi->ifree_bitmap, sbi->nr_inodes, ino, 1))
         return;
 
+    /* Increase number of free inodes */
     sbi->nr_free_inodes++;
 }
 
@@ -86,6 +92,7 @@ static inline void put_blocks(struct simplefs_sb_info *sbi,
     if (put_free_bits(sbi->bfree_bitmap, sbi->nr_blocks, bno, len))
         return;
 
+    /* Increase number of free blocks */
     sbi->nr_free_blocks += len;
 }
 

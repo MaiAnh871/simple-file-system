@@ -8,10 +8,30 @@
 #include "bitmap.h"
 #include "simplefs.h"
 
-static const struct inode_operations simplefs_inode_ops;
-static const struct inode_operations symlink_inode_ops;
+static const struct inode_operations simplefs_inode_ops = {
+    .lookup = simplefs_lookup,
+    .create = simplefs_create,
+    .unlink = simplefs_unlink,
+    .mkdir = simplefs_mkdir,
+    .rmdir = simplefs_rmdir,
+    .rename = simplefs_rename,
+    .link = simplefs_link,
+    .symlink = simplefs_symlink,
+};
 
-/* Get inode ino from disk */
+static const struct inode_operations symlink_inode_ops = {
+    .get_link = simplefs_get_link,
+};
+
+/**
+ * @brief Get inode ino from disk. Used to get the inode of a given number, after the VFS inode is obtained by the VFS iget_locked:
+ * If the inode already exists in the cache, return without modification.
+ * If there is no cache in the inode, read it from the inode store, add the information and return it.
+ * 
+ * @param sb super block of file system
+ * @param ino inode number to get
+ * @return struct inode* 
+ */
 struct inode *simplefs_iget(struct super_block *sb, unsigned long ino)
 {
     struct inode *inode = NULL;
@@ -19,7 +39,11 @@ struct inode *simplefs_iget(struct super_block *sb, unsigned long ino)
     struct simplefs_inode_info *ci = NULL;
     struct simplefs_sb_info *sbi = SIMPLEFS_SB(sb);
     struct buffer_head *bh = NULL;
+
+    /* Number of block */
     uint32_t inode_block = (ino / SIMPLEFS_INODES_PER_BLOCK) + 1;
+
+    /* Remainder */
     uint32_t inode_shift = ino % SIMPLEFS_INODES_PER_BLOCK;
     int ret;
 
@@ -27,7 +51,20 @@ struct inode *simplefs_iget(struct super_block *sb, unsigned long ino)
     if (ino >= sbi->nr_inodes)
         return ERR_PTR(-EINVAL);
 
-    /* Get a locked inode from Linux */
+    /**
+     * @brief Obtain an inode from a mounted file system
+     * 
+     * @param sb super block of file system
+     * @param ino inode number to get
+     * 
+     * Search for the inode specified by @ino in the inode cache and if present
+     * return it with an increased reference count. This is for file systems
+     * where the inode number is sufficient for unique identification of an inode.
+     *
+     * If the inode is not in cache, allocate a new inode and return it locked,
+     * hashed, and with the I_NEW flag set.  The file system gets to fill it in
+     * before unlocking it via unlock_new_inode().
+     */
     inode = iget_locked(sb, ino);
     if (!inode)
         return ERR_PTR(-ENOMEM);
@@ -75,7 +112,6 @@ struct inode *simplefs_iget(struct super_block *sb, unsigned long ino)
         inode->i_link = ci->i_data;
         inode->i_op = &symlink_inode_ops;
     }
-
     brelse(bh);
 
     /* Unlock the inode to make it usable */
@@ -98,12 +134,19 @@ static struct dentry *simplefs_lookup(struct inode *dir,
                                       struct dentry *dentry,
                                       unsigned int flags)
 {
+    /* Superblock of directory */
     struct super_block *sb = dir->i_sb;
+
+    /* Dir on VFS */
     struct simplefs_inode_info *ci_dir = SIMPLEFS_INODE(dir);
     struct inode *inode = NULL;
     struct buffer_head *bh = NULL, *bh2 = NULL;
+
+    /* Files in dir */
     struct simplefs_file_ei_block *eblock = NULL;
     struct simplefs_dir_block *dblock = NULL;
+
+    /* Contain inode and file name */
     struct simplefs_file *f = NULL;
     int ei, bi, fi;
 
@@ -112,9 +155,11 @@ static struct dentry *simplefs_lookup(struct inode *dir,
         return ERR_PTR(-ENAMETOOLONG);
 
     /* Read the directory block on disk */
-    bh = sb_bread(sb, ci_dir->ei_block);
+    bh = sb_bread(sb, ci_dir->ei_block); /* Block with list of extents for this file */
     if (!bh)
         return ERR_PTR(-EIO);
+
+    /* Get this information */
     eblock = (struct simplefs_file_ei_block *) bh->b_data;
 
     /* Search for the file in directory */
@@ -124,10 +169,14 @@ static struct dentry *simplefs_lookup(struct inode *dir,
 
         /* Iterate blocks in extent */
         for (bi = 0; bi < eblock->extents[ei].ee_len; bi++) {
+            /* Read each block in extent */
             bh2 = sb_bread(sb, eblock->extents[ei].ee_start + bi);
             if (!bh2)
                 return ERR_PTR(-EIO);
+            
+            /* Get this information */
             dblock = (struct simplefs_dir_block *) bh2->b_data;
+
             /* Search file in ei_block */
             for (fi = 0; fi < SIMPLEFS_FILES_PER_BLOCK; fi++) {
                 f = &dblock->files[fi];
@@ -135,7 +184,10 @@ static struct dentry *simplefs_lookup(struct inode *dir,
                     brelse(bh2);
                     goto search_end;
                 }
+                /* Compare SIMPLEFS_FILENAME_LEN characters between f->filename and dentry->d_name.name */
                 if (!strncmp(f->filename, dentry->d_name.name, SIMPLEFS_FILENAME_LEN)) {
+
+                    /* Get inode */
                     inode = simplefs_iget(sb, f->inode);
                     brelse(bh2);
                     goto search_end;
@@ -151,9 +203,11 @@ search_end:
 
     /* Update directory access time */
     dir->i_atime = current_time(dir);
+
+    /* Put the inode on the super block's dirty list. */
     mark_inode_dirty(dir);
 
-    /* Fill the dentry with the inode */
+    /* Fill the dentry with the inode. This adds the entry to the hash queues and initializes @inode. */
     d_add(dentry, inode);
 
     return NULL;
@@ -177,9 +231,11 @@ static struct inode *simplefs_new_inode(struct inode *dir, mode_t mode)
         return ERR_PTR(-EINVAL);
     }
 
-    /* Check if inodes are available */
+    /* Get superblock of directory */
     sb = dir->i_sb;
     sbi = SIMPLEFS_SB(sb);
+
+    /* Check if inodes are available */
     if (sbi->nr_free_inodes == 0 || sbi->nr_free_blocks == 0)
         return ERR_PTR(-ENOSPC);
 
@@ -915,17 +971,3 @@ static const char *simplefs_get_link(struct dentry *dentry,
     return inode->i_link;
 }
 
-static const struct inode_operations simplefs_inode_ops = {
-    .lookup = simplefs_lookup,
-    .create = simplefs_create,
-    .unlink = simplefs_unlink,
-    .mkdir = simplefs_mkdir,
-    .rmdir = simplefs_rmdir,
-    .rename = simplefs_rename,
-    .link = simplefs_link,
-    .symlink = simplefs_symlink,
-};
-
-static const struct inode_operations symlink_inode_ops = {
-    .get_link = simplefs_get_link,
-};

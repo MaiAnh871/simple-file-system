@@ -458,7 +458,7 @@ int simplefs_fill_super(struct super_block *sb, void *data, int silent)
     }
 
     
-    /* Create root inode */
+    /* Create root inode, get inode from d */
     root_inode = simplefs_iget(sb, 0);
     if (IS_ERR(root_inode)) {
         ret = PTR_ERR(root_inode);
