@@ -98,6 +98,8 @@ struct inode *simplefs_iget(struct super_block *sb, unsigned long ino)
     inode->i_mtime.tv_sec = (time64_t) le32_to_cpu(cinode->i_mtime);
     inode->i_mtime.tv_nsec = 0;
     inode->i_blocks = le32_to_cpu(cinode->i_blocks);
+
+    /* Directly set an inode's link count */
     set_nlink(inode, le32_to_cpu(cinode->i_nlink));
 
     if (S_ISDIR(inode->i_mode)) {
@@ -244,6 +246,7 @@ static struct inode *simplefs_new_inode(struct inode *dir, mode_t mode)
     if (!ino)
         return ERR_PTR(-ENOSPC);
 
+    /* Get inode ino from disk */
     inode = simplefs_iget(sb, ino);
     if (IS_ERR(inode)) {
         ret = PTR_ERR(inode);
@@ -256,6 +259,7 @@ static struct inode *simplefs_new_inode(struct inode *dir, mode_t mode)
 #else
         inode_init_owner(inode, dir, mode);
 #endif
+        /* Directly set an inode's link count */
         set_nlink(inode, 1);
         inode->i_ctime = inode->i_atime = inode->i_mtime = current_time(inode);
         inode->i_op = &symlink_inode_ops;
@@ -278,16 +282,24 @@ static struct inode *simplefs_new_inode(struct inode *dir, mode_t mode)
     inode_init_owner(inode, dir, mode);
 #endif
     inode->i_blocks = 1;
+
+    /* Directory */
     if (S_ISDIR(mode)) {
         ci->ei_block = bno;
         inode->i_size = SIMPLEFS_BLOCK_SIZE;
         inode->i_fop = &simplefs_dir_ops;
-        set_nlink(inode, 2); /* . and .. */
+
+        /* Directly set an inode's link count, . and .. */
+        set_nlink(inode, 2); 
+    
+    /* File type */
     } else if (S_ISREG(mode)) {
         ci->ei_block = bno;
         inode->i_size = 0;
         inode->i_fop = &simplefs_file_ops;
         inode->i_mapping->a_ops = &simplefs_aops;
+
+        /* Directly set an inode's link count */
         set_nlink(inode, 1);
     }
 
@@ -337,14 +349,20 @@ static int simplefs_create(struct inode *dir,
     if (strlen(dentry->d_name.name) > SIMPLEFS_FILENAME_LEN)
         return -ENAMETOOLONG;
 
-    /* Read parent directory index */
+    /* Make dir simplefs_inode */
     ci_dir = SIMPLEFS_INODE(dir);
+
+    /* Get superblock of dir */
     sb = dir->i_sb;
+
+    /* Read parent directory index */
     bh = sb_bread(sb, ci_dir->ei_block);
     if (!bh)
         return -EIO;
 
+    /* Get this information */
     eblock = (struct simplefs_file_ei_block *) bh->b_data;
+
     /* Check if parent directory is full */
     if (eblock->nr_files == SIMPLEFS_MAX_SUBFILES) {
         ret = -EMLINK;
@@ -373,10 +391,10 @@ static int simplefs_create(struct inode *dir,
     brelse(bh2);
 
     /* Find first free slot in parent index and register new inode */
-    ei = eblock->nr_files / SIMPLEFS_FILES_PER_EXT;
+    ei = eblock->nr_files / SIMPLEFS_FILES_PER_EXT; // Number of extent
     bi = eblock->nr_files % SIMPLEFS_FILES_PER_EXT
          / SIMPLEFS_FILES_PER_BLOCK;
-    fi = eblock->nr_files % SIMPLEFS_FILES_PER_BLOCK;
+    fi = eblock->nr_files % SIMPLEFS_FILES_PER_BLOCK; // Remainder
 
     if (!eblock->extents[ei].ee_start) {
         bno = get_free_blocks(SIMPLEFS_SB(sb), 8);
@@ -403,6 +421,7 @@ static int simplefs_create(struct inode *dir,
     strncpy(dblock->files[fi].filename, dentry->d_name.name,
             SIMPLEFS_FILENAME_LEN);
 
+    /* Done create file, increse number of files in eblock or directory files */
     eblock->nr_files++;
     mark_buffer_dirty(bh2);
     mark_buffer_dirty(bh);
@@ -413,10 +432,11 @@ static int simplefs_create(struct inode *dir,
     mark_inode_dirty(inode);
     dir->i_mtime = dir->i_atime = dir->i_ctime = current_time(dir);
     if (S_ISDIR(mode))
+        /* Directly increase an inode's link count */
         inc_nlink(dir);
     mark_inode_dirty(dir);
 
-    /* setup dentry */
+    /* Fill in inode information for a dentry */
     d_instantiate(dentry, inode);
 
     return 0;
@@ -436,6 +456,7 @@ end:
     return ret;
 }
 
+/* Remove inode from directory */
 static int simplefs_remove_from_dir(struct inode *dir, struct dentry *dentry)
 {
     struct super_block *sb = dir->i_sb;
@@ -450,6 +471,8 @@ static int simplefs_remove_from_dir(struct inode *dir, struct dentry *dentry)
     bh = sb_bread(sb, SIMPLEFS_INODE(dir)->ei_block);
     if (!bh)
         return -EIO;
+
+    /* Get this info */
     eblock = (struct simplefs_file_ei_block *) bh->b_data;
     for (ei = 0; ei < SIMPLEFS_MAX_EXTENTS; ei++) {
         if (!eblock->extents[ei].ee_start)
@@ -466,6 +489,7 @@ static int simplefs_remove_from_dir(struct inode *dir, struct dentry *dentry)
                 break;
 
             if (found) {
+                /* Similar to strcpy */
                 memmove(dblock_prev->files + SIMPLEFS_FILES_PER_BLOCK - 1,
                         dblock->files, sizeof(struct simplefs_file));
                 brelse(bh_prev);
@@ -480,6 +504,7 @@ static int simplefs_remove_from_dir(struct inode *dir, struct dentry *dentry)
                 dblock_prev = dblock;
                 continue;
             }
+
             /* Remove file from parent directory */
             for (fi = 0; fi < SIMPLEFS_FILES_PER_BLOCK; fi++) {
                 if (dblock->files[fi].inode == inode->i_ino) {
@@ -694,7 +719,7 @@ static int simplefs_rename(struct inode *old_dir,
         goto release_new;
     }
 
-    /* insert in new parent directory */
+    /* Insert in new parent directory */
     /* Get new freeblocks for extent if needed*/
     if (new_pos < 0) {
         bno = get_free_blocks(SIMPLEFS_SB(sb), 8);
@@ -730,7 +755,7 @@ static int simplefs_rename(struct inode *old_dir,
         inc_nlink(new_dir);
     mark_inode_dirty(new_dir);
 
-    /* remove target from old parent directory */
+    /* Remove target from old parent directory */
     ret = simplefs_remove_from_dir(old_dir, old_dentry);
     if (ret != 0)
         goto release_new;
@@ -897,7 +922,7 @@ static int simplefs_symlink(struct inode *dir,
     if (l > sizeof(ci->i_data))
         return -ENAMETOOLONG;
 
-    /* fill directory data block */
+    /* Fill directory data block */
     bh = sb_bread(sb, ci_dir->ei_block);
     if (!bh)
         return -EIO;

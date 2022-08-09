@@ -467,7 +467,7 @@ int simplefs_fill_super(struct super_block *sb, void *data, int silent)
 #if USER_NS_REQUIRED()
     inode_init_owner(&init_user_ns, root_inode, NULL, root_inode->i_mode);
 #else
-    /* Init uid,gid,mode for new inode according to posix standards */
+    /* Init uid, gid, mode for new inode according to posix standards */
     inode_init_owner(root_inode, NULL, root_inode->i_mode);
 #endif
     
